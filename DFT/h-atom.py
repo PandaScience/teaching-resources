@@ -44,7 +44,7 @@ def rseq(t, y, en, l):
     return [y1d, y2d]
 
 
-def integrate(en, l=0, tmin=1e-3, tmax=20):
+def integrate(en, l=0, tmin=1e-5, tmax=20):
     """Wrapper for integrating the radial SEQ."""
     sol = solve_ivp(
         # function signature must be f(t, y), so use lambda function
@@ -63,9 +63,9 @@ def integrate(en, l=0, tmin=1e-3, tmax=20):
     return sol.y[0, ::-1], sol.t[::-1]
 
 
-def get_u0(en, l=0):
+def get_u0(en, l=0, rmax=20):
     """Wrapper for finding u_nl(r=0, E_n) values after integrating rseq."""
-    u, r = integrate(en, l)
+    u, r = integrate(en, l, tmax=rmax)
     return u[0]
 
 
@@ -110,12 +110,13 @@ def main():
     plt.legend(loc="best", fancybox=True, shadow=True)
 
     # determine energy spectrum and plot eigenfunctions
-    print("--- spectrum of H-atom ---")
-    for l in range(6):
-        root = newton(lambda en: get_u0(en, l), -1.0)
+    print("\n--- spectrum of H-atom ---")
+    for l in range(8):
+        rmax = max(20, 10*l)
+        r = newton(lambda en: get_u0(en, l, rmax=rmax), -1.0, maxiter=200)
         n = l + 1
         en = -1 / (2 * n ** 2)
-        print("l = {}  -->  n = {} : En = {: .6}\t~ {}".format(l, n, root, en))
+        print("l = {}  -->  n = {} : En = {: .6}\t~ {:.6}".format(l, n, r, en))
 
     # draw all plots to screen
     plt.show()
