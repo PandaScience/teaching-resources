@@ -208,10 +208,7 @@ def main():
         ediff = abs(etot_new - etot_old)
         print("[INFO] energy difference dE = {:.5g}".format(ediff))
         # -- Step 5: check for convergence --
-        if iterstep >= 20 and ediff > 1e-5:
-            print("\n[STOP] could not achieve convergence in 20 iterations\n")
-            break
-        elif ediff > 1e-5:
+        if ediff > 1e-5:
             # -- Step 6: mix densities for faster convergence --
             # sweet spot for He: 0.88
             a = 0.88
@@ -219,6 +216,9 @@ def main():
             den_mix = Spline(r, a * den_new(r) + (1 - a) * den_old(r))
             den_old = den_new
             etot_old = etot_new
+        if iterstep > 20:
+            print("\n[STOP] could not achieve convergence in 20 iterations\n")
+            break
         else:
             print("\n[STOP] convergence achieved in", iterstep, "steps\n")
             print("/------------------------------------\\")
