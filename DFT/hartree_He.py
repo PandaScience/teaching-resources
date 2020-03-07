@@ -80,10 +80,18 @@ import numpy as np
 
 # we use some global values
 z = 2  # may be 1 for H-atom or 2 for He-atom
-h = 0.02
+h = 0.01
 tmin = 1e-5
 tmax = 20
 nsteps = round((tmax - tmin) / h)
+refine = 3
+nsteps_dense = refine * nsteps
+
+itermax = 50
+etol = 1e-5
+amix = 0.88
+
+init_density = "H-atom"  # use "H-atom" or "random"
 
 
 def rseq(t, y, en, veff):
@@ -136,8 +144,8 @@ def energy_functional(den, vh, en):
     """Builds total energy from SP-SEQ eigenvalues and Hartree energy. """
     print("[INFO] building new total energy:")
     # evaluate and integrate functions on a dense grid
-    r = np.linspace(tmin, tmax, 3 * nsteps)
-    # comapre with Eq.(1) from Assignment Sheet
+    r = np.linspace(tmin, tmax, nsteps_dense)
+    # compare with Eq.(1) from Assignment Sheet
     e_h = 0.5 * trapz(vh(r) * den(r), r)
     e_tot = z * en - e_h
     print("\t SP-SEQ eigenvalue:  {: .4f} Ha".format(en))
@@ -148,20 +156,21 @@ def energy_functional(den, vh, en):
 
 
 def iteration_step(den):
+    """Performs one iteration of the Kohn-Sham cycle (see DFT cheat sheet)."""
     # -- Step 1: build effective Kohn-Sham potential --
     # determine w(r) via Poisson's equation for initial or mixed density
     w, r = solve_poisson(den)
     # find hom.sol. w_hom(r) = a*r to match BC w(r_max) = q_tot = z
     beta = (z - w[-1]) / r[-1]
     w += beta * r
-    print("[INFO] adding hom. solution with beta = {:.4f}".format(beta))
+    print("[INFO] using w_hom(r) with beta = {:.4f}".format(beta))
     # interpolate directly Hartree potential since we don't need w(r) anymore
     # and include a Hartree-Fock-like exchange of -1/2 * Hartree potential
     vh = Spline(r, 0.5 * w / r)
 
     def veff(r):
+        """Effective Kohn-Sham potential --> compare with DFT cheat sheet."""
         vext = -z / r
-        # compare with DFT cheat sheet formulae
         return vh(r) + vext
 
     # -- Step 2: solve single-particle Schrödinger-like equation --
@@ -169,18 +178,18 @@ def iteration_step(den):
     en = newton(lambda en0: solve_rseq(en0, veff)[0][0], -2.0, maxiter=50)
     # integrate again using the correct energy
     u, r = solve_rseq(en, veff)
-    # normalize u^2 to 1 independent of z-value since psi(r) = Y_00 * u(r) / r
+    # normalize u^2 to 1 regardless of z-value since psi(r) = Y_00 * u(r) / r
     norm = trapz(u ** 2, r)
     u /= np.sqrt(norm)
     print("[INFO] normalizing |u(r)|^2 from {:.3g} to 1".format(norm))
 
     # -- Step 3: construct and interpolate new density --
-    den = Spline(r, z * u ** 2)
+    den_new = Spline(r, z * u ** 2)
 
     # -- Step 4: compute total energy
-    etot = energy_functional(den, vh, en)
+    etot = energy_functional(den_new, vh, en)
 
-    return etot, den
+    return etot, den_new
 
 
 def main():
@@ -188,35 +197,50 @@ def main():
     print("| Ass.5.2: Self-consistent loop for the helium atom |")
     print("\\---------------------------------------------------/\n")
 
-    print("[INFO] using h = {} for numerically solving ODEs".format(h))
+    print("[INIT] parameter settings for this run:")
+    print("       electrons:       {}".format(z))
+    print("       step size h:     {}".format(h))
+    print("       minimum r:       {}".format(tmin))
+    print("       maximum r:       {}".format(tmax))
+    print("       grid pts:        {}".format(nsteps))
+    print("       dense grid pts:  {}".format(nsteps_dense))
+    print("       max. iterations: {}".format(itermax))
+    print("       convergence dE:  {}".format(etol))
+    print("       mixing alpha:    {}".format(amix))
+    print("       initial density: {}".format(init_density))
 
-    print("\n[ITER] initialize with density of H-atom")
     # -- Step 0: initialize density with exact H-atom-like density --
-    den_init = lambda r: z * z ** 3 * r * np.exp(-2 * z * r)  # noqa
-    # -- Step 0: alternatively initialize density with random numbers --
-    # import random
-    # den_init = lambda r: random.randrange(0, 2)
+    if init_density == "H-atom":
+        den_init = lambda r: z * z ** 3 * r * np.exp(-2 * z * r)  # noqa
+    # -- alternatively initialize density with random numbers --
+    elif init_density == "random":
+        den_init = lambda r: random.randrange(0, 2)  # noqa
+    else:
+        raise ValueError("unknown initial density setting")
+
+    # init loop variables
     den_mix = den_old = den_init
     etot_old = 0
     iterstep = 0
-    # repeat until convergence is achieved
+
+    # Kohn-Sham cycle: repeat until convergence is achieved
     while True:
         iterstep += 1
         print("\n\n[ITER] starting {}. iteration step".format(iterstep))
+
         # -- Steps 1 to 4: solve Kohn-Sham equations and find total energy --
         etot_new, den_new = iteration_step(den_mix)
         ediff = abs(etot_new - etot_old)
-        print("[INFO] energy difference dE = {:.5g}".format(ediff))
+        print("[INFO] energy difference dE = {:.3e} Ha".format(ediff))
+
         # -- Step 5: check for convergence --
-        if iterstep >= 20 and ediff > 1e-5:
+        if iterstep >= itermax and ediff > etol:
             print("\n[STOP] could not achieve convergence in 20 iterations\n")
             break
-        elif ediff > 1e-5:
+        elif ediff > etol:
             # -- Step 6: mix densities for faster convergence --
-            # sweet spot for He: 0.88
-            a = 0.88
-            r = np.linspace(tmin, tmax, 3 * nsteps)
-            den_mix = Spline(r, a * den_new(r) + (1 - a) * den_old(r))
+            r = np.linspace(tmin, tmax, nsteps_dense)
+            den_mix = Spline(r, amix * den_new(r) + (1 - amix) * den_old(r))
             den_old = den_new
             etot_old = etot_new
         else:
@@ -224,7 +248,7 @@ def main():
             print("/------------------------------------\\")
             print("|     >>> final total energy <<<     |")
             print("|                                    |")
-            print("|     E[n] = {} * ev - E_H(SIC)[n]    |".format(z))
+            print("|     E[n] = E_s[n] - E_H(SIC)[n]    |")
             print("|          = {:.4f} Ha              |".format(etot_new))
             print("\\------------------------------------/")
             break
